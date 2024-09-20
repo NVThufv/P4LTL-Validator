@@ -1,0 +1,140 @@
+// CUP specification for a simple expression evaluator (w/ actions)
+package edu.tsinghua.ss.thufv.specLang.parse;
+import com.github.jhoenicke.javacup.runtime.*;
+import de.uni_freiburg.informatik.ultimate.ltl2aut.ast.*;
+import ast.*;
+import java.util.ArrayList;
+import java.math.BigInteger;
+
+parser P4LTLParser;
+option symbols=P4LTLSymbols;
+
+/* exprinals (tokens returned by the scanner). */
+terminal           	AP, COMMA, LPAR, RPAR, LBRACKET, RBRACKET, APPLY, DROP, IPMASK, ALWAYS, EVENTUALLY, UNTIL, WEAKUNTIL, RELEASE, AND, OR, IMPLIES, NEXT, NEG, EQ, NEQ, TRUE, FALSE, OLD, KEY, PLUS, MINUS, FWD, VALID, GT, GEQ, LT, LEQ;
+terminal String 			NAME, IP;
+terminal BigInteger 		INT;
+
+/* Non-exprinals */
+non terminal AstNode     		 texpr, predicate, term, name;
+
+precedence right IMPLIES;
+precedence left OR;
+precedence left AND;
+precedence left UNTIL, WEAKUNTIL, RELEASE;
+precedence right ALWAYS, EVENTUALLY;
+precedence right NEXT;
+precedence left EQ, NEQ;
+precedence left LT, LEQ, GEQ,GT;
+precedence left PLUS, MINUS;
+precedence left NEG;
+
+start with texpr;
+
+/*rules*/
+
+texpr ::=
+	texpr:t1 AND texpr:t2
+	{: RESULT = new BinaryTemporalOperator(BinaryTemporalType.and, t1, t2); :}
+	
+	| texpr:t1 OR texpr:t2
+	{: RESULT = new BinaryTemporalOperator(BinaryTemporalType.or, t1, t2); :}
+	
+	| texpr:t1 IMPLIES texpr:t2
+	{: RESULT = new BinaryTemporalOperator(BinaryTemporalType.implies, t1, t2); :}
+	
+	| texpr:t1 UNTIL texpr:t2
+	{: RESULT = new BinaryTemporalOperator(BinaryTemporalType.until, t1, t2); :}
+	
+	| texpr:t1 WEAKUNTIL texpr:t2
+	{: RESULT = new BinaryTemporalOperator(BinaryTemporalType.weakuntil, t1, t2); :}
+	
+	| texpr:t1 RELEASE texpr:t2
+	{: RESULT = new BinaryTemporalOperator(BinaryTemporalType.release, t1, t2); :}
+	
+	| ALWAYS LPAR texpr:t RPAR
+	{: RESULT = new UnaryTemporalOperator(UnaryTemporalType.always, t); :}
+	
+	| EVENTUALLY LPAR texpr:t RPAR
+	{: RESULT = new UnaryTemporalOperator(UnaryTemporalType.eventually, t); :}
+	
+	| NEXT LPAR texpr:t RPAR
+	{: RESULT = new UnaryTemporalOperator(UnaryTemporalType.next, t); :}
+	
+	| NEG texpr:t
+	{: RESULT = new UnaryTemporalOperator(UnaryTemporalType.neg, t); :}
+	
+	| LPAR texpr:t RPAR
+	{: RESULT = t; :}
+	
+	| AP LPAR predicate:p RPAR
+	{: RESULT = new P4LTLAtomicProposition(p); :}
+	;
+
+predicate ::= 
+	DROP
+	{: RESULT = new Drop(); :}
+	| FWD LPAR NAME:n RPAR
+	{: RESULT = new Forward(n); :}
+	| FWD LPAR INT:i RPAR
+	{: RESULT = new Forward(i); :}
+	| APPLY LPAR NAME:n RPAR
+	{: RESULT = new Apply(n); :}
+	| APPLY LPAR NAME:n1 COMMA NAME:n2 RPAR
+	{: RESULT = new Apply(n1, n2); :}
+	| VALID LPAR NAME:n RPAR
+	{: RESULT = new Valid(n); :}
+	| IPMASK LPAR NAME:n COMMA IP:ip COMMA INT:i RPAR
+	{: RESULT = new IPMask(n, ip, i); :}
+	
+	| term:t1 EQ term:t2
+	{: RESULT = new ExtendedComparativeOperator(ExtendedComparativeType.eq, t1, t2); :}
+	| term:t1 GT term:t2
+	{: RESULT = new ExtendedComparativeOperator(ExtendedComparativeType.gt, t1, t2); :}
+	| term:t1 GEQ term:t2
+	{: RESULT = new ExtendedComparativeOperator(ExtendedComparativeType.geq, t1, t2); :}
+	| term:t1 NEQ term:t2
+	{: RESULT = new ExtendedComparativeOperator(ExtendedComparativeType.neq, t1, t2); :}
+	| term:t1 LT term:t2
+	{: RESULT = new ExtendedComparativeOperator(ExtendedComparativeType.lt, t1, t2); :}
+	| term:t1 LEQ term:t2
+	{: RESULT = new ExtendedComparativeOperator(ExtendedComparativeType.leq, t1, t2); :}
+	
+	| predicate:p1 AND predicate:p2
+	{: RESULT = new BinaryOperator(BinaryType.and, p1, p2); :}
+	| predicate:p1 OR predicate:p2
+	{: RESULT = new BinaryOperator(BinaryType.or, p1, p2); :}
+	| predicate:p1 IMPLIES predicate:p2
+	{: RESULT = new BinaryOperator(BinaryType.implies, p1, p2); :}
+	| LPAR predicate:p RPAR
+	{: RESULT = p; :}
+	| NEG predicate:p
+	{: RESULT = new Not(p); :}
+	;
+
+term ::= 
+	name:n LBRACKET term:t RBRACKET
+	{: RESULT = new ArrayAccessExpr(n,t); :}
+	// currently we don't support multiaccessor
+	| OLD LPAR NAME:n RPAR
+	{: RESULT = new OldExpression(n); :}
+	| KEY LPAR NAME:table COMMA NAME:key RPAR
+	{: RESULT = new Key(table, key); :}
+	| term:t1 PLUS term:t2
+	{: RESULT = new BinaryOperator(BinaryType.plus, t1, t2); :}
+	| term:t1 MINUS term:t2
+	{: RESULT = new BinaryOperator(BinaryType.minus, t1, t2); :}
+	| LPAR term:t RPAR
+	{: RESULT = t; :}
+	
+	| name:n	
+	{: RESULT = n; :}
+	| INT:i
+	{: RESULT = new BigIntegerLiteral(i); :}
+	| TRUE
+	{: RESULT = new BoolLiteral(true); :}
+	| FALSE
+	{: RESULT = new BoolLiteral(false); :}
+	;
+
+name ::= NAME:m
+		{: RESULT = new Name(m); :};	

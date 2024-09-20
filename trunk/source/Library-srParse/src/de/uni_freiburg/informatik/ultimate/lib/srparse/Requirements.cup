@@ -1,0 +1,422 @@
+package de.uni_freiburg.informatik.ultimate.lib.srparse;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+import com.github.jhoenicke.javacup.runtime.Symbol;
+import com.github.jhoenicke.javacup.runtime.SimpleSymbolFactory;
+
+import de.uni_freiburg.informatik.ultimate.boogie.ast.BinaryExpression;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.BooleanLiteral;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.Expression;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.FunctionApplication;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.IdentifierExpression;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.IntegerLiteral;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.RealLiteral;
+import de.uni_freiburg.informatik.ultimate.boogie.ast.UnaryExpression;
+import de.uni_freiburg.informatik.ultimate.boogie.type.BoogieType;
+import de.uni_freiburg.informatik.ultimate.core.model.models.ILocation;
+import de.uni_freiburg.informatik.ultimate.core.model.services.ILogger;
+import de.uni_freiburg.informatik.ultimate.lib.pea.BoogieBooleanExpressionDecision;
+import de.uni_freiburg.informatik.ultimate.lib.pea.BooleanDecision;
+import de.uni_freiburg.informatik.ultimate.lib.pea.CDD;
+import de.uni_freiburg.informatik.ultimate.lib.smtlibutils.SmtUtils;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.AbsencePattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.BndEntryConditionPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ConstrainedChainPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.DurationBoundLPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.DurationBoundUPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.EdgeResponseBoundL2Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.EdgeResponseBoundU1Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.EdgeResponseDelayPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.EdgeResponseDelayBoundL2Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ExistenceBoundUPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.DeclarationPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.InitializationPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.InvariancePattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.InvarianceBoundL2Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.PatternBuilder;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.PatternType;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.PersistencePattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.PrecedencePattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.PrecedenceChain12Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.PrecedenceChain21Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ReccurrenceBoundLPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponsePattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponseBoundL1Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponseBoundL12Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponseChain12Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponseDelayPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponseDelayBoundL2Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.ResponseDelayBoundL1Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.TriggerResponseBoundL1Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.TriggerResponseDelayBoundL1Pattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.UniversalityPattern;
+import de.uni_freiburg.informatik.ultimate.lib.srparse.pattern.UniversalityDelayPattern;
+import de.uni_freiburg.informatik.ultimate.logic.Rational;
+
+parser ReqParser;
+option symbols = ReqSymbols;
+option java15, compact_red, newpositions;
+
+parser code {:
+
+	private String mFilename;
+	private ILogger mLogger;
+	private final Durations mDurations = new Durations(this::report_error);
+
+	public ReqParser(final ILogger logger, final Reader reader, final String filename) throws IOException {
+		this(new ReqLexer(reader));
+		mLogger = logger;
+		mFilename = filename;
+	}
+
+	public ReqParser(final ILogger logger, final InputStream stream, final String filename) throws IOException {
+		this(new ReqLexer(stream));
+		mLogger = logger;
+		mFilename = filename;
+	}
+
+	@Override
+	public void report_error(final String s, final Object sym) {
+		String location;
+		if (sym instanceof SimpleSymbolFactory.LineColumnSymbol) {
+			final SimpleSymbolFactory.LineColumnSymbol bsym = (SimpleSymbolFactory.LineColumnSymbol) sym;
+			location = bsym.getLocation();
+		} else if ((sym instanceof Symbol) && ((Symbol) sym).sym == ReqSymbols.EOF) {
+			location = "EOF";
+		} else {
+			location = "UNKNOWN";
+		}
+		final String filename = mFilename == null ? "" : (mFilename + ":");
+		mLogger.error(filename + location + ": " + s);
+	}
+
+	public void report_error(final String s) {
+		report_error(s, cur_token);
+	}
+
+	@Override
+	public void syntax_error(final Symbol sym) {
+		report_error("Syntax Error", sym);
+	}
+	
+	public PatternType<?> registerNonInitPattern(final PatternType<?> p) {
+		if (p != null) {
+			mDurations.addNonInitPattern(p);
+		}
+		return p;
+	}
+
+	public DeclarationPattern registerInitPattern(final DeclarationPattern init) {
+		if (init != null) {
+			mDurations.addInitPattern(init);
+		}
+		return init;
+	}
+	
+	public static ReqParserResult parseFile(final ILogger logger, final String reqFileName) throws Exception {
+		try (final FileInputStream fis = new FileInputStream(reqFileName)) {
+			final ReqParser parser =
+					new ReqParser(logger, fis, reqFileName);
+			final Symbol goal = parser.parse();
+			final PatternType<?>[] patterns = (PatternType[]) goal.value;
+			return new ReqParserResult(parser.mDurations, Arrays.asList(patterns));
+		}
+	}
+:}
+
+action code {:
+    public ILocation getLocation(Symbol sBegin, Symbol sEnd) {
+	    int startLine = sBegin.left;
+	    int endLine = sEnd.right;
+	    int startColumn = 0;
+	    int endColumn = 0;
+	    return new ReqLocation(parser.mFilename, startLine, endLine, startColumn, endColumn);
+	}
+:}
+
+/*init with {: getScanner().init(); :} */
+scan with {: return getScanner().next_token(); :}
+
+/* Keywords */
+terminal GLOBALLY, BEFORE, AFTER, BETWEEN, AND, UNTIL, INPUT, OUTPUT, INTERNAL, CONST;
+terminal IT, IS, NEVER, ALWAYS, THE, CASE, THAT, INITIALLY;
+terminal IF, HOLD, HOLDS, HELD, EVENTUALLY, PERSISTENTLY;
+terminal TRANSITIONS, TO, STATES, IN, WHICH, OCCUR, AT, TWICE, AFTERWARDS;
+terminal THEN, PREVIOUSLY, AS, WELL;
+terminal WAS, PRECEDED, SUCCEEDED, BY, TOGGLES;
+terminal WHERE, DOES, NOT;
+terminal ONCE, BECOMES, SATISFIED, FOR, EVERY, LATER;
+terminal MOST, LEAST, LESS, THAN;
+terminal TIME, UNITS, SEC, USEC, MSEC;
+terminal THERE, ONE, EXECUTION, SEQUENCE, SUCH;
+/* Other Symbols */
+terminal DOT, COMMA, IDSEP;
+terminal LAND, LOR, LNOT, LIMPLIES;
+terminal LPAR, RPAR, QUOTE;
+terminal LE, GREATER, LTEQ, GTEQ, NEQ, EQ, PARTORDER;
+terminal PLUS, MINUS;
+terminal TIMES, DIVIDE, MOD;
+terminal TRUE, FALSE;
+terminal String ID;
+terminal String TYPE;
+terminal String REALNUMBER;
+terminal String NUMBER;
+
+/* Non-terminals */
+non terminal String propid;
+non terminal CDD expression, expr;
+non terminal String atom, cid, duration;
+non terminal PatternType<?> property;
+non terminal PatternBuilder pattern, opattern, rtpattern;
+non terminal SrParseScope<?> scope;
+non terminal PatternType<?>[] patternset;
+non terminal Rational num;
+non terminal boolean bool;
+non terminal List<Expression> exprCommaPlus, exprCommaStar;
+non terminal Expression exprImplies, exprImpliesNI, exprAnd, exprAndNI, exprOr, exprOrNI;
+non terminal Expression expr1NI, expr2NI, expr3NI, expr5NI; 
+non terminal Expression expr6NI, expr7NI, expr9NI;
+
+precedence left LOR;
+precedence left LAND;
+precedence nonassoc LNOT;
+
+/* The grammar */
+
+patternset ::=
+	property*:set {: RESULT = set; :}
+	;
+
+property ::= propid?:id scope:s COMMA? pattern:p DOT?
+               {: p.setScope(s).setId(id); RESULT = parser.registerNonInitPattern(p.build(parser.mDurations)); :}
+            | error
+               {: RESULT = null; :}
+          	| INPUT cid:i IS ID:t
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,t,DeclarationPattern.VariableCategory.IN)); :}
+		  	| OUTPUT cid:i IS ID:t
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,t,DeclarationPattern.VariableCategory.OUT)); :}
+		 	| INTERNAL cid:i IS ID:t
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,t,DeclarationPattern.VariableCategory.HIDDEN)); :}
+		 	| CONST cid:i IS NUMBER:v
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,"int",DeclarationPattern.VariableCategory.CONST, new IntegerLiteral(getLocation(v$,v$),BoogieType.TYPE_INT, v))); :}
+		 	| CONST cid:i IS REALNUMBER:v
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,"real",DeclarationPattern.VariableCategory.CONST, new RealLiteral(getLocation(v$,v$),BoogieType.TYPE_REAL, v))); :}
+		 	| CONST cid:i IS MINUS NUMBER:v
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,"int",DeclarationPattern.VariableCategory.CONST, new UnaryExpression(getLocation(v$,v$), UnaryExpression.Operator.ARITHNEGATIVE, new IntegerLiteral(getLocation(v$,v$),BoogieType.TYPE_INT, v)))); :}
+		 	| CONST cid:i IS MINUS REALNUMBER:v
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,"real",DeclarationPattern.VariableCategory.CONST, new UnaryExpression(getLocation(v$,v$), UnaryExpression.Operator.ARITHNEGATIVE, new RealLiteral(getLocation(v$,v$),BoogieType.TYPE_REAL, v)))); :}
+		 	| CONST cid:i IS bool:v
+		  	   {: RESULT = parser.registerInitPattern(new DeclarationPattern(i,"bool",DeclarationPattern.VariableCategory.CONST, new BooleanLiteral(getLocation(v$,v$),BoogieType.TYPE_BOOL, v))); :}
+           ;
+
+propid ::= ID:id IDSEP
+			{: RESULT = id; :}
+		;
+
+scope ::=
+    GLOBALLY
+      {: RESULT = new SrParseScopeGlobally(); :}
+  | BEFORE expression:p
+      {: RESULT = new SrParseScopeBefore(p); :}
+  | AFTER expression:p
+      {: RESULT = new SrParseScopeAfter(p); :}
+  | BETWEEN expression:p AND expression:q 
+      {: RESULT = new SrParseScopeBetween(p,q); :}
+  | AFTER expression:p UNTIL expression:q
+      {: RESULT = new SrParseScopeAfterUntil(p,q); :}
+  ;
+  
+pattern ::=	IT IS NEVER THE CASE THAT expression:r HOLDS
+			{: RESULT = new PatternBuilder(); RESULT.setType(AbsencePattern.class); RESULT.addCdd(r); :}
+  		| IT IS ALWAYS THE CASE THAT expression:r HOLDS
+			{: RESULT = new PatternBuilder(); RESULT.setType(UniversalityPattern.class); RESULT.addCdd(r); :}
+		| IT IS ALWAYS THE CASE THAT INITIALLY expression:r HOLDS 
+			{: RESULT = new PatternBuilder(); RESULT.setType(InitializationPattern.class); RESULT.addCdd(r); :}
+		| IT IS ALWAYS THE CASE THAT IF expression:r HOLDS COMMA? THEN IT HOLDS PERSISTENTLY
+      		{: RESULT = new PatternBuilder(); RESULT.setType(PersistencePattern.class); RESULT.addCdd(r); :}	
+  		| IT IS ALWAYS THE CASE THAT IF expression:r HOLDS COMMA? THEN expression:s HOLDS AS WELL
+      		{: RESULT = new PatternBuilder(); RESULT.setType(InvariancePattern.class); RESULT.addCdd(s,r); :}
+	  	| expression:r EVENTUALLY HOLDS
+	      	{: RESULT = new PatternBuilder(); RESULT.setType(ResponsePattern.class); RESULT.addCdd(BoogieBooleanExpressionDecision.createTrue(),r); :}
+		| TRANSITIONS TO STATES IN WHICH expression:r HOLDS OCCUR AT MOST TWICE
+	      	{: RESULT = new PatternBuilder(); RESULT.setType(ExistenceBoundUPattern.class); RESULT.addCdd(r); :}
+		| IT IS ALWAYS THE CASE THAT opattern:r 
+			{: RESULT = r; :}
+	  	| IT IS ALWAYS THE CASE THAT rtpattern:r
+	  		{: RESULT = r; :}
+	  	;
+  
+opattern ::= IF expression:r HOLDS COMMA? THEN expression:s PREVIOUSLY HELD
+      			{: RESULT = new PatternBuilder(); RESULT.setType(PrecedencePattern.class); RESULT.addCdd(s,r); :}
+  			| IF expression:r HOLDS AND IS SUCCEEDED BY expression:s COMMA? THEN expression:t PREVIOUSLY HELD
+				{: RESULT = new PatternBuilder(); RESULT.setType(PrecedenceChain12Pattern.class); RESULT.addCdd(t,s,r); :}
+  			| IF expression:r HOLDS COMMA? THEN expression:s PREVIOUSLY HELD AND WAS PRECEDED BY expression:t
+				{: RESULT = new PatternBuilder(); RESULT.setType(PrecedenceChain21Pattern.class); RESULT.addCdd(t,s,r); :}
+  			| IF expression:r HOLDS COMMA? THEN expression:s EVENTUALLY HOLDS
+				{: RESULT = new PatternBuilder(); RESULT.setType(ResponsePattern.class); RESULT.addCdd(s,r); :}
+  			| IF expression:r HOLDS COMMA? THEN expression:s EVENTUALLY HOLDS AND IS SUCCEEDED BY expression:t
+				{: RESULT = new PatternBuilder(); RESULT.setType(ResponseChain12Pattern.class); RESULT.addCdd(t,s,r); :}
+  			| IF expression:r HOLDS COMMA? THEN expression:s EVENTUALLY HOLDS AND IS SUCCEEDED BY expression:t WHERE expression:u DOES NOT HOLD BETWEEN expression:v AND expression:w
+				{: RESULT = new PatternBuilder(); RESULT.setType(ConstrainedChainPattern.class); RESULT.addCdd(w,v,u,t,s,r); :}
+  			;
+  
+rtpattern ::= ONCE expression:r BECOMES SATISFIED COMMA? IT HOLDS FOR AT LEAST duration:c1
+				{: RESULT = new PatternBuilder().setType(DurationBoundLPattern.class).addCdd(r).addDuration(c1); :}
+  			| ONCE expression:r BECOMES SATISFIED COMMA? IT HOLDS FOR LESS THAN duration:c1
+				{: RESULT = new PatternBuilder().setType(DurationBoundUPattern.class).addCdd(r).addDuration(c1); :}
+			| ONCE expression:r BECOMES SATISFIED COMMA? expression:s HOLDS FOR AT LEAST duration:c1
+				{: RESULT = new PatternBuilder().setType(EdgeResponseBoundL2Pattern.class).addCdd(s,r).addDuration(c1); :}
+			| ONCE expression:r BECOMES SATISFIED AND HOLDS FOR AT MOST duration:c1 COMMA? THEN expression:s HOLDS AFTERWARDS
+				{: RESULT = new PatternBuilder().setType(EdgeResponseBoundU1Pattern.class).addCdd(s,r).addDuration(c1); :}
+			| ONCE expression:r BECOMES SATISFIED COMMA? expression:s HOLDS AFTER AT MOST duration:c1
+				{: RESULT = new PatternBuilder().setType(EdgeResponseDelayPattern.class).addCdd(s,r).addDuration(c1); :}	
+			| ONCE expression:r BECOMES SATISFIED COMMA? expression:s HOLDS AFTER AT MOST duration:c1 FOR AT LEAST duration:c2
+				{: RESULT = new PatternBuilder().setType(EdgeResponseDelayBoundL2Pattern.class).addCdd(s,r).addDuration(c1, c2); :}
+			| expression:r HOLDS AT LEAST EVERY duration:c1
+				{: RESULT = new PatternBuilder().setType(ReccurrenceBoundLPattern.class).addCdd(r).addDuration(c1); :}
+			| expression:r HOLDS AFTER AT MOST duration:c1
+				{: RESULT = new PatternBuilder().setType(UniversalityDelayPattern.class).addCdd(r).addDuration(c1); :}
+  			| IF expression:r HOLDS COMMA? THEN expression:s HOLDS AFTER AT MOST duration:c1
+				{: RESULT = new PatternBuilder().setType(ResponseDelayPattern.class).addCdd(s,r).addDuration(c1); :}
+  			| IF expression:r HOLDS FOR AT LEAST duration:c1 COMMA? THEN expression:s HOLDS AFTERWARDS FOR AT LEAST duration:c2
+				{: RESULT = new PatternBuilder().setType(ResponseBoundL12Pattern.class).addCdd(s,r).addDuration(c1,c2); :}
+			| IF expression:r HOLDS FOR AT LEAST duration:c1 COMMA? THEN expression:s HOLDS AFTER AT MOST duration:c2
+				{: RESULT = new PatternBuilder().setType(ResponseDelayBoundL1Pattern.class).addCdd(s,r).addDuration(c1, c2); :}	
+  			| IF expression:r HOLDS FOR AT LEAST duration:c1 COMMA? THEN expression:s HOLDS AFTERWARDS
+				{: RESULT = new PatternBuilder().setType(ResponseBoundL1Pattern.class).addCdd(s,r).addDuration(c1); :}
+  			| IF expression:r HOLDS COMMA? THEN expression:s HOLDS AFTER AT MOST duration:c1 FOR AT LEAST duration:c2
+				{: RESULT = new PatternBuilder().setType(ResponseDelayBoundL2Pattern.class).addCdd(s,r).addDuration(c1, c2); :}						
+  			| IF expression:r HOLDS COMMA? THEN expression:s HOLDS FOR AT LEAST duration:c1
+				{: RESULT = new PatternBuilder().setType(InvarianceBoundL2Pattern.class).addCdd(s,r).addDuration(c1); :}
+  			/* BndEntryConditionPattern is deprecated. */
+  			| AFTER expression:r HOLDS FOR AT LEAST duration:c1 COMMA? THEN expression:s HOLDS
+				{: RESULT = new PatternBuilder().setType(BndEntryConditionPattern.class).addCdd(s,r).addDuration(c1); :}
+			| AFTER expression:r HOLDS FOR AT LEAST duration:c1 COMMA? AND expression:s HOLDS COMMA? THEN expression:t HOLDS
+				{: RESULT = new PatternBuilder().setType(TriggerResponseBoundL1Pattern.class).addCdd(t,s,r).addDuration(c1); :}
+			| AFTER expression:r HOLDS FOR AT LEAST duration:c1 COMMA? AND expression:s HOLDS COMMA? THEN expression:t HOLDS AFTER AT MOST duration:c2
+				{: RESULT = new PatternBuilder().setType(TriggerResponseDelayBoundL1Pattern.class).addCdd(t,s,r).addDuration(c1, c2); :}	
+  			;
+
+expression ::= QUOTE expr:e QUOTE {: RESULT = e; :}
+ 			;
+ 			
+exprCommaStar ::=
+	/* empty */ {: RESULT = Collections.emptyList(); :}
+	| exprCommaPlus:l
+	;
+
+exprCommaPlus ::=
+	  expr1NI:e
+	  {: RESULT = new ArrayList<Expression>(); RESULT.add(e); :}
+	| exprCommaPlus:el COMMA expr1NI:e
+	  {: el.add(e); RESULT = el; :}
+	;
+             
+expr ::= atom:a {: RESULT = BooleanDecision.create(a); :}
+       | expr1NI:e {: RESULT = BoogieBooleanExpressionDecision.create(e); :}       
+       ;
+
+expr1NI ::= expr2NI:e1 LIMPLIES exprImpliesNI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.LOGICIMPLIES, e1, e2);:}
+        | expr2NI:e {:RESULT = e;:}
+        ;
+        
+exprImpliesNI ::= expr2NI:e1 LIMPLIES exprImpliesNI:e2
+            {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.LOGICIMPLIES, e1, e2);:}
+          | expr2NI:e {:RESULT = e;:}
+          ;
+          
+expr2NI ::= expr3NI:e1 LAND exprAndNI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.LOGICAND, e1, e2);:}
+        | expr3NI:e1 LOR exprOrNI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.LOGICOR, e1, e2);:}
+        | expr3NI:e {:RESULT = e;:}
+        ;
+        
+exprAndNI ::= expr3NI:e1 LAND exprAndNI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.LOGICAND, e1, e2);:}
+          | expr3NI:e {:RESULT = e;:}
+          ;
+          
+exprOrNI ::= expr3NI:e1 LOR exprOrNI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.LOGICOR, e1, e2);:}
+          | expr3NI:e {:RESULT = e;:}
+		  ;
+       
+
+expr3NI ::= expr5NI:e1 LE expr5NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.COMPLT, e1, e2);:}
+        | expr5NI:e1 GREATER expr5NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.COMPGT, e1, e2);:}
+        | expr5NI:e1 LTEQ expr5NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.COMPLEQ, e1, e2);:}
+        | expr5NI:e1 GTEQ expr5NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.COMPGEQ, e1, e2);:}
+        | expr5NI:e1 EQ expr5NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.COMPEQ, e1, e2);:}
+        | expr5NI:e1 NEQ expr5NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.COMPNEQ, e1, e2);:}
+        | expr5NI:e {:RESULT = e;:}
+       ;
+       
+expr5NI ::= expr5NI:e1 PLUS expr6NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.ARITHPLUS, e1, e2);:}
+        | expr5NI:e1 MINUS expr6NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.ARITHMINUS, e1, e2);:}
+        | expr6NI:e {:RESULT = e;:}
+        ;
+        
+expr6NI ::= expr6NI:e1 TIMES expr7NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.ARITHMUL, e1, e2);:}
+        | expr6NI:e1 DIVIDE expr7NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.ARITHDIV, e1, e2);:}
+        | expr6NI:e1 MOD expr7NI:e2
+           {:RESULT = new BinaryExpression(getLocation(e1$,e2$), BinaryExpression.Operator.ARITHMOD, e1, e2);:}
+        | expr7NI:e {:RESULT = e;:}
+        ;
+expr7NI ::= LNOT expr7NI:e
+           {:RESULT = new UnaryExpression(getLocation(e$,e$), UnaryExpression.Operator.LOGICNEG, e);:} 
+		| MINUS expr7NI:e
+           {:RESULT = new UnaryExpression(getLocation(e$,e$), UnaryExpression.Operator.ARITHNEGATIVE, e);:}
+        | expr9NI:e {:RESULT = e;:}
+        ;
+
+expr9NI ::= REALNUMBER:n {: RESULT = new RealLiteral(getLocation(n$,n$), BoogieType.TYPE_REAL, n); :}
+	    | NUMBER:n {: RESULT = new IntegerLiteral(getLocation(n$,n$), BoogieType.TYPE_INT, n); :}
+     	| cid:i {: RESULT = new IdentifierExpression(getLocation(i$,i$), i); :}
+	    | bool:b {:RESULT = new BooleanLiteral(getLocation(b$,b$),BoogieType.TYPE_BOOL,b);:}
+	    | LPAR expr1NI:e RPAR {: RESULT = e; :}
+	    | ID:i LPAR exprCommaStar:args RPAR
+	      {: RESULT = new FunctionApplication(getLocation(i$,args$), i, args.toArray(new Expression[args.size()])); :}
+	    ;
+	
+cid ::= ID
+      | cid:c DOT ID:id {: RESULT= c + "." + id; :}
+      ;
+
+bool ::= TRUE {: RESULT = true; :}
+		|FALSE {: RESULT = false; :}
+		;
+		
+duration ::= num:n TIME UNITS {: RESULT = n.toString(); :}
+           | num:n USEC {: RESULT = n.toString(); :}
+           | num:n MSEC {: RESULT = n.mul(Rational.valueOf(1000,1)).toString(); :}
+           | num:n SEC {: RESULT = n.mul(Rational.valueOf(1000000,1)).toString(); :}
+           | cid:i TIME UNITS {: RESULT = i; :}
+           | QUOTE cid:i QUOTE TIME UNITS {: RESULT = i; :}
+           ;
+           
+num ::= NUMBER:n {: RESULT = SmtUtils.toRational(Integer.parseInt(n)); :}
+	  | REALNUMBER:n {: RESULT = SmtUtils.toRational(BigDecimal.valueOf(Double.parseDouble(n))); :}
+      | QUOTE NUMBER:n QUOTE {: RESULT = SmtUtils.toRational(Integer.parseInt(n)); :}
+      | QUOTE REALNUMBER:n QUOTE {: RESULT = SmtUtils.toRational(BigDecimal.valueOf(Double.parseDouble(n))); :}
+      ;
