@@ -1,0 +1,2 @@
+java -jar C:\Users\13566\Desktop\Projects\ultimate\trunk\source\JavaCup\JFlex.jar SpecLang.flex
+java -jar C:\Users\13566\Desktop\Projects\ultimate\trunk\source\JavaCup\jh-javacup-1.2.jar -parser "SpecLangParser" -symbols "sSpecLangSymbols" < SpecLang.cup

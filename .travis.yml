@@ -1,0 +1,34 @@
+dist: bionic
+language: java
+jdk:
+ - openjdk11
+
+os:
+ - linux
+ 
+env:
+  global:
+   - JAVA_OPTS="-enableassertions -Xmx2g"
+   - _JAVA_OPTIONS="-enableassertions -Xmx2g"
+
+before_script:
+  - free -g
+  - uname -a
+  - cat /proc/cpuinfo
+  - wget http://www.lsv.ens-cachan.fr/~gastin/ltl2ba/ltl2ba-1.2b1.tar.gz -O /tmp/ltl2ba.tar.gz
+  - tar -xvf /tmp/ltl2ba.tar.gz
+  - cd ltl2ba-1.2b1 && make && cd ..
+  - export PATH=$PATH:$PWD/ltl2ba-1.2b1:$PWD/releaseScripts/default/adds
+   
+script: 
+  - cd trunk/source/BA_MavenParentUltimate && mvn clean install
+
+cache:
+  directories:
+    - $HOME/.m2
+
+notifications:
+  email: 
+    on_success: change
+    on_failure: always
+
