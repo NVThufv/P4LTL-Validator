@@ -54,13 +54,12 @@ TARGETDIR=U${TOOLNAME}-${ARCH}
 CONFIGDIR="$TARGETDIR"/config
 DATADIR="$TARGETDIR"/data
 ZIPFILE=${TOOLNAME}-${ARCH}.zip
-EXAMPLES=../../trunk/examples/P4LTL/example.bpl
-SETTINGS=../../trunk/examples/P4LTL/P4LTL*.epf
+SETTINGS=../../trunk/examples/P4LTL/P4LTL.epf
 TOOLCHAIN=../../trunk/examples/P4LTL/P4LTL.xml
-PARSECHAIN=../../trunk/examples/P4LTL/JustParse.xml
+# PARSECHAIN=../../trunk/examples/P4LTL/JustParse.xml
 EXESCRIPT=../../trunk/examples/P4LTL/P4LTL.sh
 CHECKSCRIPT=../../trunk/examples/P4LTL/Check.sh
-PARSESCRIPT=../../trunk/examples/P4LTL/ParseP4LTL.sh
+# PARSESCRIPT=../../trunk/examples/P4LTL/ParseP4LTL.sh
 
 
 
@@ -81,12 +80,11 @@ mkdir "$CONFIGDIR"
 mkdir "$DATADIR"
 
 test cp -a ../../trunk/source/BA_SiteRepository/target/${ARCHPATH}/* "$TARGETDIR"/
-test cp ${EXAMPLES} "$TARGETDIR"/
 test cp ${EXESCRIPT} "$TARGETDIR"/
 test cp ${CHECKSCRIPT} "$TARGETDIR"/
-test cp ${PARSESCRIPT} "$TARGETDIR"/
+# test cp ${PARSESCRIPT} "$TARGETDIR"/
 test cp ${TOOLCHAIN} "$CONFIGDIR"/
-test cp ${PARSECHAIN} "$CONFIGDIR"/
+# test cp ${PARSECHAIN} "$CONFIGDIR"/
 test cp ${SETTINGS} "$CONFIGDIR"/
 
 ## copy all adds to target dir 
@@ -114,3 +112,4 @@ test zip -q ${ZIPFILE} -r "$TARGETDIR"/*
 echo "Removing products..."
 rm -r ../../trunk/source/BA_SiteRepository/target
 rm -r "$TARGETDIR"
+
